@@ -24,9 +24,8 @@ The script uses a function called *mybootPX* which is adapted from Gavin's R pac
 
 #Library
 ```{r}
-devtools::install_github("brownegm/hydrafit", force= T)
-install.packages("here")
-knitr::opts_knit$set(root.dir = "C:/Users/mboisse/Dropbox/Mon PC (Jaboty20)/Post_doc_CalState_LA/Miquel_data")
+# devtools::install_github("brownegm/hydrafit", force= T)
+# install.packages("here")
 
 library(hydrafit)
 library(ggplot2)
@@ -47,13 +46,12 @@ library(purrr)
 library(readr)
 library(FSA)
 
-result_path <- "C:/Users/marion.boisseaux/Dropbox/Mon PC (Jaboty20)/Post_doc_CalState_LA/Miquel_data/results"
 ```
 
 
 # Functions
 
-## converstion
+## conversion
 
 ```{r}
 se <- function(x, na.rm = T){
@@ -62,45 +60,94 @@ se <- function(x, na.rm = T){
 
 #Convert function to Marvin/Hydrafit structure in order to use the BootPX function
 
+model_map <- c(
+  "Sigmoidal"   = "sig",
+  "Logistic"   = "log",
+  "Exponential"= "exp",
+  "Exponential2" = "exp2",
+  "Linear"     = "Linear"
+)
+
 convert <- function(fit) {
 
-  mod_code <- unname(model_map[fit$model])
+  s  <- fit$summary
+  bp <- fit$best_pars
+  se <- fit$std_errs
+  
+  mod_code <- unname(model_map[s$model])
 
+# --- UNIVERSAL PARAMETER MAPPING ---
+
+A <- bp$A
+B <- bp$B
+sterrorA <- se$A
+sterrorB <- se$B
+
+# CASE 1: 4-parameter model (Logistic / Sigmoidal)
+if (!is.null(bp$Xo) || !is.null(bp$C)) {
+
+  if (!is.null(bp$C)) {
+    C <- bp$C
+    sterrorC <- se$C
+  } else {
+    C <- bp$Xo
+    sterrorC <- se$Xo
+  }
+
+  D <- bp$sd
+  sterrorD <- se$sd
+
+}
+
+# CASE 2: 3-parameter model (Exponential family)
+else if (!is.null(bp$sd) && length(bp) == 3) {
+
+  C <- bp$sd
+  sterrorC <- se$sd
+
+  D <- NA
+  sterrorD <- NA
+}
+
+else {
+  stop("Model structure not recognized.")
+}
+
+  # --- BUILD OUTPUT ---
   out <- list(
-    species = fit$Species,
+    species = s$Species,
     data.type = mod_code,
 
-    A = fit$A,
-    B = fit$B,
-    C = fit$C,
-    D = if (!is.null(fit$D)) fit$D else NA,
+    A = A,
+    B = B,
+    C = C,
+    D = D,
 
-    loglikeli = fit$loglikeli,
-    rsq = fit$rsq,
-    slope = fit$slope,
-    AIC = fit$AIC,
-    AICcorr = fit$AICcorr,
+    loglikeli = s$loglikeli,
+    rsq = s$rsq,
+    slope = s$slope,
+    AIC = s$AIC,
+    AICcorr = s$AICcorr,
 
-    sterrorA = fit$sterrorA,
-    sterrorB = fit$sterrorB,
-    sterrorC = fit$sterrorC,
-    sterrorD = fit$sterrorD,
+    sterrorA = sterrorA,
+    sterrorB = sterrorB,
+    sterrorC = sterrorC,
+    sterrorD = sterrorD,
 
-    N = fit$N,
-
-    maxCond = fit$Kmax,
-    psi_k20 = fit$psi_kleaf20,
-    psi_k50 = fit$psi_kleaf50,
-    psi_k80 = fit$psi_kleaf80,
-    psi_k95 = fit$psi_kleaf95,
-
-    max_cond_at0.1 = fit$Kmax_at_0.1MPa,
-    psi_k20_at0.1 = fit$psi_kleaf20,
-    psi_k50_at0.1 = fit$psi_kleaf50,
-    psi_k80_at0.1 = fit$psi_kleaf80,
-    psi_k95_at0.1 = fit$psi_kleaf95,
-    
     vcov = fit$vcov,
+    N = s$N,
+
+    maxCond = s$Kmax,
+    psi_k20 = s$psi_kleaf20,
+    psi_k50 = s$psi_kleaf50,
+    psi_k80 = s$psi_kleaf80,
+    psi_k95 = s$psi_kleaf95,
+
+    max_cond_at0.1 = s$Kmax_at_0.1MPa,
+    psi_k20_at0.1 = s$psi_kleaf20,
+    psi_k50_at0.1 = s$psi_kleaf50,
+    psi_k80_at0.1 = s$psi_kleaf80,
+    psi_k95_at0.1 = s$psi_kleaf95,
 
     plot = NULL,
     models_within_2AIC = NA
@@ -113,517 +160,277 @@ convert <- function(fit) {
 }
 ```
 
-#Assimilation - A
-```{r}
-# Load all model fitting results (RDS file containing previously computed model fits). This is done using the following script: "Script for curve fit - AIC and parameters-Boisseaux/Browne
-all_results_r <- readRDS("../results/A/A_anneal_modified/model_fitting_results_full_A.RDS") 
-
-# Select the specific subset of models corresponding to sigmoid fits for Assimilation
-marion <- c(all_results_r[4], all_results_r[9], all_results_r[14], all_results_r[19], all_results_r[24], all_results_r[29])
-
-##Convert Marion's model structure into Hydrafit format for each species
-avsa_fit <- convert_marion_to_best(marion$Avsa_1_Sigmoidal)
-hovu_fit <- convert_marion_to_best(marion$Hovu_1_Sigmoidal)
-trae_fit <- convert_marion_to_best(marion$Trae_1_Sigmoidal)
-chga_fit <- convert_marion_to_best(marion$Chga_1_Sigmoidal)
-pegl_fit <- convert_marion_to_best(marion$Pegl_1_Sigmoidal)
-zema_fit <- convert_marion_to_best(marion$Zema_1_Sigmoidal)
-
-# Perform bootstrap analysis
-avsa_boot <- bootPX(fit = avsa_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-hovu_boot <- bootPX(fit = hovu_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-trae_boot <- bootPX(fit = trae_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-
-chga_boot <- bootPX(fit = chga_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-pegl_boot <- bootPX(fit = pegl_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-zema_boot <- bootPX(fit = zema_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-
-# Combine all bootstrap results into a single list for easier handling
-boot_list <- list(
-  avsa = avsa_boot,
-  hovu = hovu_boot,
-  trae = trae_boot,
-  chga = chga_boot,
-  pegl = pegl_boot,
-  zema = zema_boot)
-
-# Define which species are C3 and which are C4
-c3_species <- c("avsa", "hovu", "trae")
-c4_species <- c("chga", "pegl", "zema")
-
-
-# Create a tidy table from the bootstrap Assimilation results for all species
-boot_table_A <- purrr::map_dfr(names(boot_list), function(name) {
-  x <- boot_list[[name]]
-  tibble::tibble(
-    Species = x$species,
-    type = if (tolower(name) %in% c3_species) "C3" else "C4",
-    psi_PX = x$psi_PX,
-    boot_mean = x$boot_mean,
-    boot_median = x$boot_median,
-    boot_se = x$boot_se,
-    margin_error = x$margin_error,
-    px_est = x$px_est,
-    conf.low = x$conf.low,
-    conf.high = x$conf.high)})
-
-boot_table_A
-
-# Save the bootstrap summary table to a CSV file
-write.csv(x = boot_table_A, file = "../results/A/boottableA.csv")
-```
-
 #Conductance - gs
 ```{r}
 # Load all model fitting results (RDS file containing previously computed model fits). This is done using the following script: "Script for curve fit - AIC and parameters-Boisseaux/Browne
-all_results_r <- readRDS("../results/gs/gs_anneal_modified/model_fitting_results_full_gs.RDS") 
+all_results_r <- readRDS("C:/Users/marion.boisseaux/Dropbox/Mon PC (Jaboty20)/Post_doc_CalState_LA/Amber/HydraulicSeasonVariation/results/model_fitting_results_gs.RDS") 
 
 # Select the specific subset of models corresponding to X fits for Stomatal conductance (gs)
-marion <- c(all_results_r[4], all_results_r[9], all_results_r[14], all_results_r[19], all_results_r[24], all_results_r[30])
+gs_summer <- c(all_results_r[1], all_results_r[14], all_results_r[21], all_results_r[33], all_results_r[43], all_results_r[54])
 
-##Convert Marion's model structure into Hydrafit format for each species
-avsa_fit <- convert_marion_to_best(marion$Avsa_1_Sigmoidal)
-hovu_fit <- convert_marion_to_best(marion$Hovu_1_Sigmoidal)
-trae_fit <- convert_marion_to_best(marion$Trae_1_Sigmoidal)
-chga_fit <- convert_marion_to_best(marion$Chga_1_Sigmoidal)
-pegl_fit <- convert_marion_to_best(marion$Pegl_1_Sigmoidal)
-zema_fit <- convert_marion_to_best(marion$Zema_1_Linear)
+gs_spring <- c(all_results_r[6], all_results_r[19], all_results_r[29], all_results_r[39], all_results_r[49], all_results_r[59])
+
+##Convert model structure into Hydrafit format for each species
+#summer
+plra_fit_summer <- convert(gs_summer$PLRA_Summer_Exponential)
+rica_fit_summer <- convert(gs_summer$RICA_Summer_Logistic)
+sala_fit_summer <- convert(gs_summer$SALA_Summer_Sigmoidal)
+cecr_fit_summer <- convert(gs_summer$CECR_Summer_Exponential)
+quag_fit_summer <- convert(gs_summer$QUAG_Summer_Logistic)
+umca_fit_summer <- convert(gs_summer$UMCA_Summer_Sigmoidal)
+
+#spring
+plra_fit_spring <- convert(gs_spring$PLRA_spring_Exponential)
+rica_fit_spring <- convert(gs_spring$RICA_spring_Sigmoidal)
+sala_fit_spring <- convert(gs_spring$SALA_spring_Sigmoidal)
+cecr_fit_spring <- convert(gs_spring$CECR_spring_Sigmoidal)
+quag_fit_spring <- convert(gs_spring$QUAG_spring_Sigmoidal)
+umca_fit_spring <- convert(gs_spring$UMCA_spring_Sigmoidal)
 
 # Perform bootstrap analysis
-avsa_boot <- bootPX(fit = avsa_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-hovu_boot <- bootPX(fit = hovu_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-trae_boot <- bootPX(fit = trae_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+#summer
+plra_boot_summer <- bootPX(fit = plra_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+rica_boot_summer <- bootPX(fit = rica_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+sala_boot_summer <- bootPX(fit = sala_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+cecr_boot_summer <- bootPX(fit = cecr_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+quag_boot_summer <- bootPX(fit = quag_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+umca_boot_summer <- bootPX(fit = umca_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
 
-chga_boot <- bootPX(fit = chga_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-pegl_boot <- bootPX(fit = pegl_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-zema_boot <- bootPX(fit = zema_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+#spring
+plra_boot_spring <- bootPX(fit = plra_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+rica_boot_spring <- bootPX(fit = rica_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+sala_boot_spring <- bootPX(fit = sala_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+cecr_boot_spring <- bootPX(fit = cecr_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+quag_boot_spring <- bootPX(fit = quag_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+umca_boot_spring <- bootPX(fit = umca_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
 
 # Combine all bootstrap results into a single list for easier handling
-boot_list <- list(
-  avsa = avsa_boot,
-  hovu = hovu_boot,
-  trae = trae_boot,
-  chga = chga_boot,
-  pegl = pegl_boot,
-  zema = zema_boot)
+boot_list_summer <- list(
+  plra = plra_boot_summer,
+  rica = rica_boot_summer,
+  sala = sala_boot_summer,
+  cecr = cecr_boot_summer,
+  quag = quag_boot_summer,
+  umca = umca_boot_summer)
 
-# Define which species are C3 and which are C4
-c3_species <- c("avsa", "hovu", "trae")
-c4_species <- c("chga", "pegl", "zema")
+boot_list_spring <- list(
+  plra = plra_boot_spring,
+  rica = rica_boot_spring,
+  sala = sala_boot_spring,
+  cecr = cecr_boot_spring,
+  quag = quag_boot_spring,
+  umca = umca_boot_spring)
 
 
-# Create a tidy table from the bootstrap results for all species
-boot_table_gs <- purrr::map_dfr(names(boot_list), function(name) {
-  x <- boot_list[[name]]
-  tibble::tibble(
-    Species = x$species,
-    type = if (tolower(name) %in% c3_species) "C3" else "C4",
-    psi_PX = x$psi_PX,
-    boot_mean = x$boot_mean,
-    boot_median = x$boot_median,
-    boot_se = x$boot_se,
-    margin_error = x$margin_error,
-    px_est = x$px_est,
-    conf.low = x$conf.low,
-    conf.high = x$conf.high)})
+make_boot_table <- function(boot_list, season_name) {
+  purrr::map_dfr(boot_list, function(x) {
+    tibble::tibble(
+      Species = x$species,
+      Season = season_name,
+      psi_PX = x$psi_PX,
+      boot_mean = x$boot_mean,
+      boot_median = x$boot_median,
+      boot_se = x$boot_se,
+      margin_error = x$margin_error,
+      px_est = x$px_est,
+      conf.low = x$conf.low,
+      conf.high = x$conf.high
+    )
+  })
+}
+
+boot_table_gs <- dplyr::bind_rows(
+  make_boot_table(boot_list_summer, "Summer"),
+  make_boot_table(boot_list_spring, "Spring")
+)
 
 boot_table_gs
 
 # Save the bootstrap summary table to a CSV file
-write.csv(x = boot_table_gs, file = "../results/gs/boottablegs.csv")
+write.csv(x = boot_table_gs, file = "C:/Users/marion.boisseaux/Dropbox/Mon PC (Jaboty20)/Post_doc_CalState_LA/Amber/HydraulicSeasonVariation/results/boottablegs.csv")
+
+
+library(ggplot2)
+
+fig1 <- ggplot(boot_table_gs %>% filter(boot_mean < 10), 
+       aes(x = Season, y = boot_mean, color = Species)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  theme_minimal() +
+  ylab("Psi at 50% loss gs") +
+  ggtitle("Seasonal gs50 shifts per species")
+
+#get only species that have CI not overlapping between seasons
+sig_species <- boot_table_gs %>%
+  select(Species, Season, conf.low, conf.high) %>%
+  pivot_wider(names_from = Season,
+              values_from = c(conf.low, conf.high)) %>%
+  mutate(sig = (conf.low_Spring > conf.high_Summer) |
+               (conf.low_Summer > conf.high_Spring)) %>%
+  filter(sig == T) %>%
+  pull(Species)
+
+#create label variable
+boot_table_gs2 <- boot_table_gs %>%
+  mutate(Species_label = ifelse(Species %in% sig_species,
+                                paste0(Species, " *"),
+                                Species))
+#plot
+fig2 <-ggplot(boot_table_gs2 %>% filter(boot_mean < 10),
+       aes(x = Season, y = boot_mean, group = Species)) +
+  geom_point(aes(color = Season), size = 3) +
+  geom_line(color = "grey40", linewidth = 0.8) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                width = 0.15) +
+  facet_wrap(~ Species_label) +
+  scale_color_manual(values = c("Spring" = "#2E8B57",
+                                "Summer" = "#E69F00")) +
+  theme_minimal() +
+  ylab("gs50") +
+  ggtitle("Seasonal gs50 shifts within species\n* = non-overlapping confidence intervals")
+
+ggsave(filename = "fig1.jpeg", plot = fig1)
+ggsave(filename = "fig2.jpeg", plot = fig2)
+
 ```
 
-#Kleaf
+#Kleaf - ca marche mais c'est en fait gs
 ```{r}
 # Load all model fitting results (RDS file containing previously computed model fits). This is done using the following script: "Script for curve fit - AIC and parameters-Boisseaux/Browne
-all_results_r <- readRDS("../results/Kleaf/Kleaf_anneal_modified/model_fitting_results_full_Kleaf.RDS") 
+all_results_kleaf <- readRDS("C:/Users/marion.boisseaux/Dropbox/Mon PC (Jaboty20)/Post_doc_CalState_LA/Amber/HydraulicSeasonVariation/results/model_fitting_results_kleaf.RDS") 
 
-# Select the specific subset of models corresponding to X fits for Kleaf
-marion <- c(all_results_r[3], all_results_r[7], all_results_r[11], all_results_r[18], all_results_r[23], all_results_r[28])
+# Select the specific subset of models corresponding to X fits for Stomatal conductance (kleaf)
+kleaf_summer <- c(all_results_kleaf[1], 
+                  all_results_kleaf[13],
+                  all_results_kleaf[21], 
+                  all_results_kleaf[32], 
+                  all_results_kleaf[41],
+                  all_results_kleaf[52])
 
-##Convert Marion's model structure into Hydrafit format for each species
-avsa_fit <- convert_marion_to_best(marion$AVSA_1_Logistic)
-hovu_fit <- convert_marion_to_best(marion$HOVU_1_Exponential2)
-trae_fit <- convert_marion_to_best(marion$TRAE_1_Exponential)
-chga_fit <- convert_marion_to_best(marion$CHGA_1_Logistic)
-pegl_fit <- convert_marion_to_best(marion$PEGL_1_Logistic)
-zema_fit <- convert_marion_to_best(marion$ZEMA_1_Logistic)
+kleaf_spring <- c(all_results_kleaf[8], 
+                  all_results_kleaf[17],
+                  all_results_kleaf[26], 
+                  all_results_kleaf[36], 
+                  all_results_kleaf[46],
+                  all_results_kleaf[56] )
 
-# Perform bootstrap analysis
-avsa_boot <- bootPX(fit = avsa_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-hovu_boot <- bootPX(fit = hovu_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-trae_boot <- bootPX(fit = trae_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+##Convert model structure into Hydrafit format for each species
+#summer
+plra_fit_summer <- convert(kleaf_summer$PLRA_Summer_Exponential2)
+rica_fit_summer <- convert(kleaf_summer$RICA_Summer_Exponential2)
+sala_fit_summer <- convert(kleaf_summer$SALA_Summer_Exponential)
+cecr_fit_summer <- convert(kleaf_summer$CECR_Summer_Exponential)
+quag_fit_summer <- convert(kleaf_summer$QUAG_Summer_Logistic)
+umca_fit_summer <- convert(kleaf_summer$UMCA_Summer_Exponential)
 
-chga_boot <- bootPX(fit = chga_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-pegl_boot <- bootPX(fit = pegl_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-zema_boot <- bootPX(fit = zema_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-
-# Combine all bootstrap results into a single list for easier handling
-boot_list <- list(
-  avsa = avsa_boot,
-  hovu = hovu_boot,
-  trae = trae_boot,
-  chga = chga_boot,
-  pegl = pegl_boot,
-  zema = zema_boot)
-
-# Define which species are C3 and which are C4
-c3_species <- c("avsa", "hovu", "trae")
-c4_species <- c("chga", "pegl", "zema")
-
-
-# Create a tidy table from the bootstrap results for all species
-boot_table_Kleaf <- purrr::map_dfr(names(boot_list), function(name) {
-  x <- boot_list[[name]]
-  tibble::tibble(
-    Species = x$species,
-    type = if (tolower(name) %in% c3_species) "C3" else "C4",
-    psi_PX = x$psi_PX,
-    boot_mean = x$boot_mean,
-    boot_median = x$boot_median,
-    boot_se = x$boot_se,
-    margin_error = x$margin_error,
-    px_est = x$px_est,
-    conf.low = x$conf.low,
-    conf.high = x$conf.high)})
-
-boot_table_Kleaf
-
-# Save the bootstrap summary table to a CSV file
-write.csv(x = boot_table_Kleaf, file = "../results/Kleaf/boottableKleaf.csv")
-```
-
-#Kplant
-```{r}
-# Load all model fitting results (RDS file containing previously computed model fits). This is done using the following script: "Script for curve fit - AIC and parameters-Boisseaux/Browne
-all_results_r <- readRDS("../results/KplantKroots_results/Kplant/Kplant_anneal_modified/model_fitting_results_full_Kplant.RDS") 
-
-# Select the specific subset of models corresponding to X fits for Kplant
-marion <- c(all_results_r[1], all_results_r[9], all_results_r[14], all_results_r[16], all_results_r[25], all_results_r[26])
-
-##Convert Marion's model structure into Hydrafit format for each species
-avsa_fit <- convert_marion_to_best(marion$AVSA_1_Exponential)
-hovu_fit <- convert_marion_to_best(marion$HOVU_1_Sigmoidal)
-trae_fit <- convert_marion_to_best(marion$TRAE_1_Sigmoidal)
-chga_fit <- convert_marion_to_best(marion$CHGA_1_Exponential)
-pegl_fit <- convert_marion_to_best(marion$PEGL_1_Exponential)
-zema_fit <- convert_marion_to_best(marion$ZEMA_1_Linear)
+#spring
+plra_fit_spring <- convert(kleaf_spring$PLRA_Spring_Exponential)
+rica_fit_spring <- convert(kleaf_spring$RICA_Spring_Exponential)
+sala_fit_spring <- convert(kleaf_spring$SALA_Spring_Exponential)
+cecr_fit_spring <- convert(kleaf_spring$CECR_Spring_Exponential)
+quag_fit_spring <- convert(kleaf_spring$QUAG_Spring_Exponential2)
+umca_fit_spring <- convert(kleaf_spring$UMCA_Spring_Logistic)
 
 # Perform bootstrap analysis
-avsa_boot <- bootPX(fit = avsa_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-hovu_boot <- bootPX(fit = hovu_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-trae_boot <- bootPX(fit = trae_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+#summer
+plra_boot_summer <- bootPX(fit = plra_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+rica_boot_summer <- bootPX(fit = rica_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+sala_boot_summer <- bootPX(fit = sala_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+cecr_boot_summer <- bootPX(fit = cecr_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+quag_boot_summer <- bootPX(fit = quag_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+umca_boot_summer <- bootPX(fit = umca_fit_summer, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
 
-chga_boot <- bootPX(fit = chga_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-pegl_boot <- bootPX(fit = pegl_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-zema_boot <- bootPX(fit = zema_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-
-# Combine all bootstrap results into a single list for easier handling
-boot_list <- list(
-  avsa = avsa_boot,
-  hovu = hovu_boot,
-  trae = trae_boot,
-  chga = chga_boot,
-  pegl = pegl_boot,
-  zema = zema_boot)
-
-# Define which species are C3 and which are C4
-c3_species <- c("avsa", "hovu", "trae")
-c4_species <- c("chga", "pegl", "zema")
-
-
-# Create a tidy table from the bootstrap results for all species
-boot_table_Kplant <- purrr::map_dfr(names(boot_list), function(name) {
-  x <- boot_list[[name]]
-  tibble::tibble(
-    Species = x$species,
-    type = if (tolower(name) %in% c3_species) "C3" else "C4",
-    psi_PX = x$psi_PX,
-    boot_mean = x$boot_mean,
-    boot_median = x$boot_median,
-    boot_se = x$boot_se,
-    margin_error = x$margin_error,
-    px_est = x$px_est,
-    conf.low = x$conf.low,
-    conf.high = x$conf.high)})
-
-boot_table_Kplant
-
-# Save the bootstrap summary table to a CSV file
-write.csv(x = boot_table_Kplant, file = "../results/KplantKroots_results/Kplant/boottableKplant.csv")
-```
-
-#Kroot
-
-```{r}
-# Load all model fitting results (RDS file containing previously computed model fits). This is done using the following script: "Script for curve fit - AIC and parameters-Boisseaux/Browne
-all_results_r <- readRDS("../results/KplantKroots_results/Kroot/Kroot_anneal_modified/model_fitting_results_full_Kroot.RDS") 
-
-# Select the specific subset of models corresponding to X fits for Kroot
-marion <- c(all_results_r[1], all_results_r[6], all_results_r[12], all_results_r[16], all_results_r[21], all_results_r[26])
-
-##Convert Marion's model structure into Hydrafit format for each species
-avsa_fit <- convert_marion_to_best(marion$AVSA_1_Exponential)
-hovu_fit <- convert_marion_to_best(marion$HOVU_1_Exponential)
-trae_fit <- convert_marion_to_best(marion$TRAE_1_Exponential2)
-chga_fit <- convert_marion_to_best(marion$CHGA_1_Exponential)
-pegl_fit <- convert_marion_to_best(marion$PEGL_1_Exponential)
-zema_fit <- convert_marion_to_best(marion$ZEMA_1_Exponential)
-
-# Perform bootstrap analysis
-avsa_boot <- bootPX(fit = avsa_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-hovu_boot <- bootPX(fit = hovu_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-trae_boot <- bootPX(fit = trae_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-
-chga_boot <- bootPX(fit = chga_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-pegl_boot <- bootPX(fit = pegl_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
-zema_boot <- bootPX(fit = zema_fit, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+#spring
+plra_boot_spring <- bootPX(fit = plra_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+rica_boot_spring <- bootPX(fit = rica_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+sala_boot_spring <- bootPX(fit = sala_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+cecr_boot_spring <- bootPX(fit = cecr_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+quag_boot_spring <- bootPX(fit = quag_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
+umca_boot_spring <- bootPX(fit = umca_fit_spring, px = 0.5, psi_max = 0.1, sims = 1000, seed = 123,  margin = "quantile",  pairwise = FALSE)
 
 # Combine all bootstrap results into a single list for easier handling
-boot_list <- list(
-  avsa = avsa_boot,
-  hovu = hovu_boot,
-  trae = trae_boot,
-  chga = chga_boot,
-  pegl = pegl_boot,
-  zema = zema_boot)
+boot_list_summer <- list(
+  plra = plra_boot_summer,
+  rica = rica_boot_summer,
+  sala = sala_boot_summer,
+  cecr = cecr_boot_summer,
+  quag = quag_boot_summer,
+  umca = umca_boot_summer)
 
-# Define which species are C3 and which are C4
-c3_species <- c("avsa", "hovu", "trae")
-c4_species <- c("chga", "pegl", "zema")
+boot_list_spring <- list(
+  plra = plra_boot_spring,
+  rica = rica_boot_spring,
+  sala = sala_boot_spring,
+  cecr = cecr_boot_spring,
+  quag = quag_boot_spring,
+  umca = umca_boot_spring)
 
 
-# Create a tidy table from the bootstrap results for all species
-boot_table_Kroot <- purrr::map_dfr(names(boot_list), function(name) {
-  x <- boot_list[[name]]
-  tibble::tibble(
-    Species = x$species,
-    type = if (tolower(name) %in% c3_species) "C3" else "C4",
-    psi_PX = x$psi_PX,
-    boot_mean = x$boot_mean,
-    boot_median = x$boot_median,
-    boot_se = x$boot_se,
-    margin_error = x$margin_error,
-    px_est = x$px_est,
-    conf.low = x$conf.low,
-    conf.high = x$conf.high)})
+make_boot_table <- function(boot_list, season_name) {
+  purrr::map_dfr(boot_list, function(x) {
+    tibble::tibble(
+      Species = x$species,
+      Season = season_name,
+      psi_PX = x$psi_PX,
+      boot_mean = x$boot_mean,
+      boot_median = x$boot_median,
+      boot_se = x$boot_se,
+      margin_error = x$margin_error,
+      px_est = x$px_est,
+      conf.low = x$conf.low,
+      conf.high = x$conf.high
+    )
+  })
+}
 
-boot_table_Kroot
-
-# Save the bootstrap summary table to a CSV file
-write.csv(x = boot_table_Kroot, file = "../results/KplantKroots_results/Kroot/boottableKroot.csv")
-```
-
-#Combine
-```{r}
-boot_table_A <- boot_table_A %>% mutate(trait = "A")
-boot_table_gs <- boot_table_gs %>% mutate(trait = "gs")
-
-boot_temp <- rbind(boot_table_A, boot_table_gs)
-
-boot_temp <- boot_temp %>%
-  mutate(Species_name = case_when(
-    Species == "Zema" ~ "Z. mays",
-    Species == "Chga" ~ "C. gayan",
-    Species == "Pegl" ~ "P. glaucum",
-    Species == "Avsa" ~ "A. sativa",
-    Species == "Hovu" ~ "H. vulgare",
-    Species == "Trae" ~ "T. aestivum",
-    TRUE ~ Species))
-
-boot_table_Kleaf <- boot_table_Kleaf %>% mutate(trait = "Kleaf")
-boot_table_Kplant <- boot_table_Kplant %>% mutate(trait = "Kplant")
-boot_table_Kroot <- boot_table_Kroot %>% mutate(trait = "Kroot")
-
-boot_temp2 <- rbind(boot_table_Kleaf, boot_table_Kroot, boot_table_Kplant)
-
-boot_temp2 <- boot_temp2 %>%
-  mutate(Species_name = case_when(
-    Species == "ZEMA" ~ "Z. mays",
-    Species == "CHGA" ~ "C. gayan",
-    Species == "PEGL" ~ "P. glaucum",
-    Species == "AVSA" ~ "A. sativa",
-    Species == "HOVU" ~ "H. vulgare",
-    Species == "TRAE" ~ "T. aestivum",
-    TRUE ~ Species))
-
-boottable_final <-rbind(boot_temp, boot_temp2)
-boottable_final
-View(boottable_final)
-
-trait_labels <- c(
-  "A"      = "P[A50]",
-  "gs"     = "P[italic(g[s])*50]",
-  "Kleaf"  = "P[italic(K[leaf])*50]",
-  "Kplant" = "P[italic(K[plant])*50]",
-  "Kroot"  = "P[italic(K[root])*50]"
+boot_table_kleaf <- dplyr::bind_rows(
+  make_boot_table(boot_list_summer, "Summer"),
+  make_boot_table(boot_list_spring, "Spring")
 )
 
+boot_table_kleaf
 
-# Remettre dans l'ordre
-boottable_final$Species_name <- factor(boottable_final$Species_name,
-  levels = c("Z. mays", "P. glaucum", "C. gayan", "T. aestivum", "H. vulgare", "A. sativa"))
+# Save the bootstrap summary table to a CSV file
+write.csv(x = boot_table_kleaf, file = "C:/Users/marion.boisseaux/Dropbox/Mon PC (Jaboty20)/Post_doc_CalState_LA/Amber/HydraulicSeasonVariation/results/boottablekleaf.csv")
 
-p_trait <- boottable_final%>%
-  ggplot(aes(x=Species_name, y=boot_mean, ymin=conf.low, ymax=conf.high, color=type)) +
-  geom_pointrange(position=position_dodge(width=0.5), size=0.8) +
-  facet_wrap(~trait, ncol=2, scales="free_x", labeller = labeller(trait = as_labeller(trait_labels, label_parsed)))+
-  coord_flip() +
-  labs(y="P50 (-MPa)", x="", color="Mecanism") +
-  scale_color_manual(values = c("C4"="#E69F00", "C3"="#56B4E9")) +
-  theme_bw(base_size=14)+
-  theme(
-    axis.text.y = element_text(face= "italic"),
-    strip.background = element_blank(),
-    legend.position = "bottom"
-  )
-p_trait
+#plot
+fig3 <- ggplot(boot_table_kleaf,
+       aes(x = Season, y = boot_mean, color = Species)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  theme_minimal() +
+  ylab("Psi at 50% loss Kleaf") +
+  ggtitle("Seasonal Kleaf50 shifts per species")
 
-ggsave(filename = "../results/bootstrap.jpg", plot = p_trait, width = 6, height = 8)
+#get only species that have CI not overlapping between seasons
+sig_species <- boot_table_kleaf %>%
+  select(Species, Season, conf.low, conf.high) %>%
+  pivot_wider(names_from = Season,
+              values_from = c(conf.low, conf.high)) %>%
+  mutate(sig = (conf.low_Spring > conf.high_Summer) |
+               (conf.low_Summer > conf.high_Spring)) %>%
+  filter(sig == T) %>%
+  pull(Species)
 
-```
+#create label variable
+boot_table_kleaf2 <- boot_table_kleaf %>%
+  mutate(Species_label = ifelse(Species %in% sig_species,
+                                paste0(Species, " *"),
+                                Species))
+#plot
+fig4<- ggplot(boot_table_kleaf2 %>% filter(boot_mean < 10),
+       aes(x = Season, y = boot_mean, group = Species)) +
+  geom_point(aes(color = Season), size = 3) +
+  geom_line(color = "grey40", linewidth = 0.8) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                width = 0.15) +
+  facet_wrap(~ Species_label) +
+  scale_color_manual(values = c("Spring" = "#2E8B57",
+                                "Summer" = "#E69F00")) +
+  theme_minimal() +
+  ylab("Kleaf50") +
+  ggtitle("Seasonal Kleaf50 shifts within species\n* = non-overlapping confidence intervals")
 
-```{r}
-# Reorder species factor
-boottable_final$Species_name <- factor(boottable_final$Species_name,
-  levels = c("Z. mays", "P. glaucum", "C. gayan", "T. aestivum", "H. vulgare", "A. sativa"))
-
-# Plot for trait A
- p_A <- ggplot(
-  boottable_final[boottable_final$trait == "A", ],
-  aes(x = Species_name, y=boot_mean,
-      ymin = conf.low, ymax = conf.high,
-      color = type)) +
-  geom_pointrange(position=position_dodge(width=0.5), size=0.8) +
-  coord_flip() +
-  labs(y = "P50 (-MPa)", x = "",
-       color = "Metabolism",
-       title = expression(P[A50])) +
-  scale_color_manual(values = c("C4" = "#E69F00", "C3" = "#56B4E9")) +
-  theme_bw(base_size = 14) +
-  theme(axis.text.y = element_text(face = "italic"),
-        plot.title = element_text(hjust = 0),
-        legend.position = "bottom")
-
-
-# Plot for trait gs
-p_gs <- ggplot(boottable_final[boottable_final$trait == "gs", ],
-              aes(x = Species_name,y=boot_mean,
-      ymin = conf.low, ymax = conf.high,
-      color = type)) +
- geom_pointrange(position=position_dodge(width=0.5), size=0.8) +
-  coord_flip() +
-  labs(y = "P50 (-MPa)", x = "",
-       color = "Metabolism",
-      title = expression(P[italic(g[s])*50])) +
-  scale_color_manual(values = c("C4" = "#E69F00", "C3" = "#56B4E9")) +
-  theme_bw(base_size = 14) +
-  theme(axis.text.y = element_blank(),
-        plot.title = element_text(hjust = 0),
-        legend.position = "bottom")
-
-# Plot for trait Kleaf
-p_Kleaf <- ggplot(boottable_final[boottable_final$trait == "Kleaf", ],
-                  aes(x = Species_name,y=boot_mean,
-      ymin = conf.low, ymax = conf.high,
-      color = type)) +
- geom_pointrange(position=position_dodge(width=0.5), size=0.8) +
-  coord_flip() +
-  labs(y = "P50 (-MPa)", x = "",
-       color = "Metabolism",
-       title = expression(P[italic(K[leaf])*50])) +
-  scale_color_manual(values = c("C4" = "#E69F00", "C3" = "#56B4E9")) +
-  theme_bw(base_size = 14) +
-  theme(axis.text.y = element_blank(),
-        plot.title = element_text(hjust = 0),
-        legend.position = "bottom")
-
-# Plot for trait Kplant
-p_Kplant <- ggplot(boottable_final[boottable_final$trait == "Kplant", ],
-                 aes(x = Species_name,y=boot_mean,
-      ymin = conf.low, ymax = conf.high,
-      color = type)) +
-  geom_pointrange(position=position_dodge(width=0.5), size=0.8) +
-  coord_flip() +
-  labs(y = "P50 (-MPa)", x = "",
-       color = "Metabolism",
-       title = expression(P[italic(K[plant])*50])) +
-  scale_color_manual(values = c("C4" = "#E69F00", "C3" = "#56B4E9")) +
-  theme_bw(base_size = 14) +
-  theme(axis.text.y = element_blank(),
-        plot.title = element_text(hjust = 0),
-        legend.position = "bottom")
-
-# Plot for trait Kroot
-p_Kroot <- ggplot(boottable_final[boottable_final$trait == "Kroot", ],
-                  aes(x = Species_name,y=boot_mean,
-      ymin = conf.low, ymax = conf.high,
-      color = type)) +
-  geom_pointrange(position=position_dodge(width=0.5), size=0.8) +
-  coord_flip() +
-  labs(y = "P50 (-MPa)", x = "",
-       color = "Metabolism",
-       title = expression(P[italic(K[root])*50])) +
-  scale_color_manual(values = c("C4" = "#E69F00", "C3" = "#56B4E9")) +
-  theme_bw(base_size = 14) +
-  theme(axis.text.y = element_blank(),
-        plot.title = element_text(hjust = 0),
-        legend.position = "bottom")
-
-Figure2 <- ggarrange(p_A, p_gs, p_Kleaf, p_Kplant, p_Kroot, labels = c("A", "B", "C", "D", "E", "F"),heights = c(1,1,1,1,1) , widths = c(1.38, 1, 1, 1, 1), ncol = 5, nrow = 1, common.legend = TRUE, legend = "bottom")
-
-Figure2 
-ggsave(filename = "../results/Figure_bootstrap2.jpg", plot = Figure2, width = 12, height = 4)
-
-```
-
-#Compare traits within a given species
-
-```{r}
-
-boottable_final <- boottable_final %>%
-  mutate(trait_label = case_when(
-    trait == "A" ~ "A",
-    trait == "gs" ~ "g[s]",
-    trait == "Kleaf" ~ "K[leaf]",
-    trait == "Kplant" ~ "K[plant]",
-    trait == "Kroot" ~ "K[root]",
-    TRUE ~ trait))
-
-boottable_final <- boottable_final %>%
-  mutate(Species_label = case_when(
-    Species_name == "Z. mays"     ~ "italic('Z. mays')",
-    Species_name == "C. gayan"    ~ "italic('C. gayan')",
-    Species_name == "P. glaucum"  ~ "italic('P. glaucum')",
-    Species_name == "A. sativa"   ~ "italic('A. sativa')",
-    Species_name == "H. vulgare"  ~ "italic('H. vulgare')",
-    Species_name == "T. aestivum" ~ "italic('T. aestivum')",
-    TRUE ~ Species_name
-  ))
-
-
-boottable_final$trait_label <- factor(boottable_final$trait_label,
-  levels = c("A","g[s]", "K[plant]", "K[leaf]", "K[root]"))
-
-p_species <- boottable_final %>%
-  ggplot(aes(x=trait_label, y=px_est, ymin=conf.low, ymax=conf.high, color=type)) +
-  geom_pointrange(position=position_dodge(width=0.5), size=0.8) +
-  facet_wrap(~Species_label, ncol=2, scales="free_x", labeller=label_parsed)+ 
-  coord_flip() +
-  labs(y="P50 (-MPa)", x="", color="Mecanism") +
-  scale_color_manual(values = c("C4"="#E69F00", "C3"="#56B4E9")) +
-  scale_x_discrete(labels = c(
-  "A" = expression(A),
-  "g[s]" = expression(g[s]),
-  "K[plant]" = expression(K[plant]),
-  "K[leaf]" = expression(K[leaf]),
-  "K[root]" = expression(K[root])
-))+
-  theme_bw(base_size=14)+
-  theme(
-    strip.background = element_blank()
-  )
-p_species
-
-ggsave(filename = "../results/boot_species.jpg",  plot = p_trait, width = 6, height = 8)
+ggsave(filename = "fig3.jpeg", plot = fig3)
+ggsave(filename = "fig4.jpeg", plot = fig4)
 ```
